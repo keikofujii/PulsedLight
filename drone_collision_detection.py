@@ -45,10 +45,12 @@ global HORIZONTAL__COLLISION_THRESHOLD
 global VERTICAL_COLLISION_THRESHOLD
 global HORIZONTAL_RECORDING_THRESHOLD
 global VERTICAL_RECORDING_THRESHOLD
-HORIZONTAL_COLLISION_THRESHOLD = .5
-VERTICAL_COLLISION_THRESHOLD = .5
-HORIZONTAL_RECORDING_THRESHOLD = 1
-VERTICAL_RECORDING_THRESHOLD = 1
+HORIZONTAL_COLLISION_THRESHOLD = 1.5
+VERTICAL_COLLISION_THRESHOLD = 1.5
+HORIZONTAL_RECORDING_THRESHOLD = 3
+VERTICAL_RECORDING_THRESHOLD = 3
+BOTTOM_SENSOR_THRESHOLD = 75
+TARGET_TAKEOFF_ALTITUDE = 2
 global QUEUE_LENGTH
 QUEUE_LENGTH = 1024
 
@@ -56,7 +58,6 @@ def initialize_and_arm():
     """
     A method to check that the vehicle is initialized and armed.
     """
-
     print "Basic pre-arm checks"
     # check the autopilot is ready
     while not vehicle.is_armable:
@@ -69,6 +70,11 @@ def initialize_and_arm():
         time.sleep(1)
 
     print "Vehicle armed."
+
+    # Wait until the vehicle is just below the target altitude
+    while not (vehicle.location.global_relative_frame.alt >= TARGET_TAKEOFF_ALTITUDE * 0.95):
+        print "Altitude: ", vehile.location.global_relative_frame.alt
+        time.sleep(1)
 
 def withinThreshold(currentGPS, targetGPS, horizontalThreshold, verticalThreshold):
         latDistance = currentGPS.lat - targetGPS.lat
@@ -201,7 +207,11 @@ class SensorThread(object):
         """ Method that runs forever """
 
         lidar = Lidar_Lite()
-
+            
+        # Get the home postition
+        home = vehicle.location.global_relative_frame
+	print home
+	
         #Attempt to connect to the lidar sensor(s)
         connected = lidar.connect(1)
 
@@ -223,55 +233,76 @@ class SensorThread(object):
         # Infinite loop
         while True:
             
-            # This line is sensor code
-            if self.hazCollision(lidar) and len(gpsHistoryQueue) > 1:
+            # If we see a object we will collide with, avoid it
+            if self.hazCollision(lidar):
 
                 try:
+                    # Acquire the lock on the GPS history queue
                     gpsHistoryQueue.dequeLock.acquire()
-                
-                    # store the previous mode so we can switch back into it later
-                    previousMode = vehicle.mode.name
 
-                    # Switch into GUIDED mode
-                    print "Going from %s mode into GUIDED mode" % previousMode
-                    vehicle.mode = VehicleMode("GUIDED")
-
-                    # Set the airspeed to 2
-                    print "Set target airspeed to 2"
-                    vehicle.airspeed = 2
-
-                    # Go toward the previous GPS location
-                    print "Going towards previous GPS point"
-
-                    # Go toward the most recent point for 2 second
+                    # If the GPS History Queue is populated, go back toward the last safe point
+                    if len(gpsHistoryQueue) > 1:
                     
-                    print "popping from HistoryQueue", len(gpsHistoryQueue)
-                    safePoint = gpsHistoryQueue.popleft()
-                    
-                    vehicle.simple_goto(safePoint)
+                        # store the previous mode so we can switch back into it later
+                        previousMode = vehicle.mode.name
 
-                    #Get the current time so that we'll advance for 2 seconds from now. 
-                    start = time.time()
+                        # Switch into GUIDED mode
+                        print "Going from %s mode into GUIDED mode" % previousMode
+                        vehicle.mode = VehicleMode("GUIDED")
 
-                    #let this loop run until two seconds have elapsed from start
-                    while((time.time() - start) < 2 and len(gpsHistoryQueue) > 1):
-                        #get the current position of the drone
-                        currentPosition = vehicle.location.global_relative_frame
-                        
-                        #If the current position of the drone is equal to the point we earlier defined as safe,
-                        #start going towards the next point. 
-                        if(withinThreshold(currentPosition,safePoint, HORIZONTAL_COLLISION_THRESHOLD, VERTICAL_COLLISION_THRESHOLD)):
-                            #get the next safe point from the queue.
-                            print "popping from HistoryQueue", len(gpsHistoryQueue)
-                            safePoint = gpsHistoryQueue.popleft()
+                        # Set the airspeed to 2
+                        print "Set target airspeed to 2"
+                        vehicle.airspeed = 2
+
+                        # Go toward the previous GPS location
+                        print "Going towards previous GPS point"
+
+                        # Go toward the most recent point for 2 seconds
+                        print "popping from HistoryQueue", len(gpsHistoryQueue)
+                        safePoint = gpsHistoryQueue.popleft()
+
+                        # Start going to the last safe point we recorded
+                        vehicle.simple_goto(safePoint)
+
+                        #Get the current time so that we'll advance for 2 seconds from now. 
+                        start = time.time()
+
+                        #let this loop run until two seconds have elapsed from start
+                        while((time.time() - start) < 2):
+                            #get the current position of the drone
+                            currentPosition = vehicle.location.global_relative_frame
                             
-                            #and head to it. 
-                            vehicle.simple_goto(safePoint)
+                            #If the current position of the drone is equal to the point we earlier defined as safe,
+                            #start going towards the next point. 
+                            if(withinThreshold(currentPosition,safePoint, HORIZONTAL_COLLISION_THRESHOLD, VERTICAL_COLLISION_THRESHOLD)):
+                                #get the next safe point from the queue.
+                                print "popping from HistoryQueue", len(gpsHistoryQueue)
+                                safePoint = gpsHistoryQueue.popleft()
 
-                    # Go back to the previous mode
-                    print "Going to previous mode: %s" % previousMode
-                    vehicle.mode = VehicleMode(previousMode)
+                                # We never want to have an empty queue, so make sure that we pop
+                                # the safePoint back on if we need to
+                                if len(gpsHistoryQueue) <= 0:
+                                    gpsHistoryQueue.append(safePoint)
+                                
+                                #and head to it. 
+                                vehicle.simple_goto(safePoint)
 
+                        # Go back to the previous mode
+                        print "Going to previous mode: %s" % previousMode
+                        vehicle.mode = VehicleMode(previousMode)
+
+                    # If the deque is not populated and we find an obstacle,
+                    # just go home
+                    else:
+                        safePoint = gpsHistoryQueue.popleft()
+                        # Put the safePoint back in so we don't ever have an empty queue
+                        gpsHistoryQueue.append(safePoint)
+                        
+                        # Go toward last safe point for 2 seconds
+                        vehicle.simple_goto(safePoint)
+                        time.sleep(2)
+
+                # Release the lock on the queue when we're done        
                 finally:
                     gpsHistoryQueue.dequeLock.release()
 
