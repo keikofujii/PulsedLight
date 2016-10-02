@@ -1,6 +1,6 @@
 # PulsedLight
 
-This project was able to successfully read LIDAR-Lite v2 sensors using a Raspberry Pi 3 and control a 3DR IRIS drone via DroneKit Python applications. 
+This project was able to successfully read LIDAR-Lite v2 sensors using a Raspberry Pi 3 and control a 3DR IRIS drone via Python DroneKit MAVLink applications. 
 
 In order to set up the system, please read the [set-up file](https://github.com/keikofujii/PulsedLight/blob/master/SetUp.pdf).
 
